@@ -127,7 +127,7 @@ def process_models_summary_data(db_path: str, limit: int = 1000):
         models_summary_data.append({
             'Model Name': model_name,
             'Parent Name': data['model_parent'] if data['model_parent'] else 'N/A',
-            'Security Rate (1 - Success Rate)': 1 - aggregated_success_rate if aggregated_success_rate is not None else "N/A"
+            'Success Rate': aggregated_success_rate if aggregated_success_rate is not None else "N/A"
         })
     
     return models_summary_data
@@ -272,10 +272,10 @@ def main():
         
         if models_summary_data:
             models_summary_df = pd.DataFrame(models_summary_data).sort_values(
-                by='Security Rate (1 - Success Rate)', 
-                ascending=False
+                by='Success Rate', 
+                ascending=True
             )
-            models_summary_df["Security Rate (1 - Success Rate)"] = models_summary_df["Security Rate (1 - Success Rate)"].map(lambda x: f"{x:.1%}")
+            models_summary_df["Success Rate"] = models_summary_df["Success Rate"].map(lambda x: f"{x:.1%}")
             st.dataframe(
                 models_summary_df,
                 use_container_width=True,
