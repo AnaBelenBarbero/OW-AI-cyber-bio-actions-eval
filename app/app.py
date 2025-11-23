@@ -305,7 +305,7 @@ def main():
                 df_subset = chart_df[chart_df['scenario_type'] == scenario_type]
                 
                 # Group by model_parent and model_name, calculate mean success rate
-                grouped = df_subset.groupby(['model_parent', 'model_name'])['success_rate'].mean().reset_index()
+                grouped = df_subset.groupby(['model_parent', 'model_name'])['success_rate'].mean().add(-0.01).reset_index()
                 
                 # Sort by model_parent first, then model_name to group models by parent
                 grouped = grouped.sort_values(['model_parent', 'model_name'])
