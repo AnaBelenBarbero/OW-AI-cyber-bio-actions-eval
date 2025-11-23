@@ -1,28 +1,23 @@
-"""
-Streamlit app for viewing evaluation runs and models.
-"""
 import streamlit as st
 import pandas as pd
 from datetime import datetime
 import sys
 from pathlib import Path
 import numpy as np
-# Add parent directory to path to import src modules
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.repository import EvalRun, EvalRunRepository
 
 BOOTSTRAPING_AGG_FUNC = np.mean
 
-# Page configuration
 st.set_page_config(
-    page_title="Evaluation Runs Dashboard",
+    page_title="AI Actions Evaluation Dashboard",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS for better styling
 st.markdown("""
     <style>
     .main-header {
@@ -58,6 +53,104 @@ def get_repository(db_path: str = "eval_runs.db"):
     return EvalRunRepository(db_path)
 
 
+@st.cache_data
+def get_cached_summary_stats(db_path: str):
+    """Get summary stats (cached)."""
+    repo = get_repository(db_path)
+    return repo.get_summary_stats()
+
+
+@st.cache_data
+def get_cached_all_runs(db_path: str, limit: int = 1000):
+    """Get all runs for filters (cached)."""
+    repo = get_repository(db_path)
+    return repo.get_eval_runs(limit=limit)
+
+
+@st.cache_data
+def get_cached_filtered_runs(db_path: str, model_parent, model_name, scenario_type, limit: int, order_by: str, order_desc: bool):
+    """Get filtered runs (cached)."""
+    repo = get_repository(db_path)
+    return repo.get_eval_runs(
+        model_parent=model_parent,
+        model_name=model_name,
+        scenario_type=scenario_type,
+        limit=limit,
+        order_by=order_by,
+        order_desc=order_desc
+    )
+
+
+@st.cache_data
+def get_cached_eval_run(db_path: str, run_id: int):
+    """Get single eval run (cached)."""
+    repo = get_repository(db_path)
+    return repo.get_eval_run(run_id)
+
+
+@st.cache_data
+def process_models_summary_data(db_path: str, limit: int = 1000):
+    """Process models summary data (cached)."""
+    all_runs = get_cached_all_runs(db_path, limit)
+    if not all_runs:
+        return []
+    
+    model_data = {}
+    for run in all_runs:
+        if run.model_name not in model_data:
+            model_data[run.model_name] = {
+                'model_parent': run.model_parent,
+                'success_rates': []
+            }
+        
+        if run.summary:
+            success_rate = run.summary.get('success_rate', None)
+            if success_rate is not None:
+                model_data[run.model_name]['success_rates'].append(success_rate)
+    
+    models_summary_data = []
+    for model_name, data in model_data.items():
+        aggregated_success_rate = None
+        if data['success_rates']:
+            aggregated_success_rate = BOOTSTRAPING_AGG_FUNC(data['success_rates'])
+        
+        models_summary_data.append({
+            'Model Name': model_name,
+            'Parent Name': data['model_parent'] if data['model_parent'] else 'N/A',
+            'Success Rate': f"{aggregated_success_rate:.1%}" if aggregated_success_rate is not None else "N/A"
+        })
+    
+    return models_summary_data
+
+
+@st.cache_data
+def process_runs_dataframe(db_path: str, model_parent, model_name, scenario_type, limit: int, order_by: str, order_desc: bool):
+    """Process runs into dataframe (cached)."""
+    runs = get_cached_filtered_runs(db_path, model_parent, model_name, scenario_type, limit, order_by, order_desc)
+    if not runs:
+        return None
+    
+    runs_data = []
+    for run in runs:
+        runs_data.append(run.model_dump(exclude=["max_tokens", "results"]))
+    
+    return pd.DataFrame(runs_data)
+
+
+@st.cache_data
+def process_results_dataframe(db_path: str, run_id: int):
+    """Process results into dataframe (cached)."""
+    run = get_cached_eval_run(db_path, run_id)
+    if not run or not run.results:
+        return None
+    
+    results_df = pd.DataFrame(run.results)
+    results_df['messages'] = results_df['messages'].apply(lambda msgs: [f"{m['role']}: {m['content']}" for m in msgs])
+    results_df['tools'] = results_df['tools'].apply(lambda tools: [tool['function']['name'] for tool in tools])
+    
+    return results_df
+
+
 def format_datetime(dt_str: str) -> str:
     """Format datetime string for display."""
     try:
@@ -68,25 +161,19 @@ def format_datetime(dt_str: str) -> str:
 
 
 def main():
-    # Header
     st.markdown('<h1 class="main-header">📊 Evaluation Runs Dashboard</h1>', unsafe_allow_html=True)
     
-    # Initialize repository
     db_path = st.sidebar.text_input("Database Path", value="eval_runs.db")
-    repo = get_repository(db_path)
     
-    # Get summary statistics
     try:
-        stats = repo.get_summary_stats()
+        stats = get_cached_summary_stats(db_path)
     except Exception as e:
         st.error(f"Error loading database: {e}")
         st.stop()
     
-    # Sidebar filters
     st.sidebar.header("🔍 Filters Run List")
     
-    # Get unique models and scenario types
-    all_runs: list[EvalRun] | None = repo.get_eval_runs(limit=1000)
+    all_runs: list[EvalRun] | None = get_cached_all_runs(db_path, limit=1000)
     unique_models = sorted(set(run.model_name for run in all_runs)) if all_runs else []
     unique_scenarios = sorted(set(run.scenario_type for run in all_runs)) if all_runs else []
     unique_model_parents = sorted(set(run.model_parent for run in all_runs)) if all_runs else []
@@ -109,15 +196,13 @@ def main():
         format_func=lambda x: "All Scenarios" if x is None else x
     )
     
-    limit = st.sidebar.number_input("Max Results", min_value=1, max_value=1000, value=50)
+    limit = st.sidebar.number_input("Max Results", min_value=1, max_value=1000, value=1)
     
-    # Main content tabs
     tab1, tab2, tab3 = st.tabs(["📈 Overview", "📋 Runs List", "🔍 Run Details"])
     
     with tab1:
         st.header("Summary Statistics")
         
-        # Metrics row
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
@@ -138,75 +223,19 @@ def main():
             else:
                 st.metric("Latest Run", "N/A")
         
-        # Charts section
-        #col1, col2 = st.columns(2)
-        #
-        #with col1:
-        #    st.subheader("Runs by Model")
-        #    if stats['by_model']:
-        #        model_df = pd.DataFrame(
-        #            list(stats['by_model'].items()),
-        #            columns=['Model', 'Count']
-        #        )
-        #        st.bar_chart(model_df.set_index('Model'))
-        #    else:
-        #        st.info("No model data available")
-        #
-        #with col2:
-        #    st.subheader("Runs by Scenario Type")
-        #    if stats['by_scenario_type']:
-        #        scenario_df = pd.DataFrame(
-        #            list(stats['by_scenario_type'].items()),
-        #            columns=['Scenario Type', 'Count']
-        #        )
-        #        st.bar_chart(scenario_df.set_index('Scenario Type'))
-        #    else:
-        #        st.info("No scenario data available")
-        
-        # Models summary table
         st.subheader("Models Summary")
-        if all_runs:
-            # Group runs by model_name
-            model_data = {}
-            for run in all_runs:
-                if run.model_name not in model_data:
-                    model_data[run.model_name] = {
-                        'model_parent': run.model_parent,
-                        'success_rates': []
-                    }
-                
-                # Extract success rate from summary if available
-                if run.summary:
-                    success_rate = run.summary.get('success_rate', None)
-                    if success_rate is not None:
-                        model_data[run.model_name]['success_rates'].append(success_rate)
-            
-            # Create DataFrame
-            models_summary_data = []
-            for model_name, data in model_data.items():
-                aggregated_success_rate = None
-                if data['success_rates']:
-                    aggregated_success_rate = BOOTSTRAPING_AGG_FUNC(data['success_rates'])
-                
-                models_summary_data.append({
-                    'Model Name': model_name,
-                    'Parent Name': data['model_parent'] if data['model_parent'] else 'N/A',
-                    'Success Rate': f"{aggregated_success_rate:.1%}" if aggregated_success_rate is not None else "N/A"
-                })
-            
-            if models_summary_data:
-                models_summary_df = pd.DataFrame(models_summary_data)
-                st.dataframe(
-                    models_summary_df,
-                    use_container_width=True,
-                    hide_index=True,
-                )
-            else:
-                st.info("No model data available for summary table.")
-        else:
-            st.info("No evaluation runs found.")
+        models_summary_data = process_models_summary_data(db_path, limit=1000)
         
-        # Latest run info
+        if models_summary_data:
+            models_summary_df = pd.DataFrame(models_summary_data)
+            st.dataframe(
+                models_summary_df,
+                use_container_width=True,
+                hide_index=True,
+            )
+        else:
+            st.info("No model data available for summary table.")
+        
         if stats['latest_run']:
             st.subheader("Latest Run")
             latest = stats['latest_run']
@@ -221,46 +250,20 @@ def main():
     with tab2:
         st.header("Evaluation Runs")
         
-        # Get filtered runs
-        runs: list[EvalRun] | None = repo.get_eval_runs(
-            model_parent=selected_model_parent,
-            model_name=selected_model,
-            scenario_type=selected_scenario,
-            limit=limit,
-            order_by="created_at",
-            order_desc=True
+        df = process_runs_dataframe(
+            db_path,
+            selected_model_parent,
+            selected_model,
+            selected_scenario,
+            limit,
+            "created_at",
+            True
         )
         
-        if not runs:
+        if df is None or df.empty:
             st.info("No evaluation runs found matching the filters.")
         else:
-            st.write(f"Showing {len(runs)} run(s)")
-            
-            # Create DataFrame for display
-            runs_data = []
-            for run in runs:
-                success_rate = None
-                total_scenarios = len(run.results)
-                if run.summary:
-                    success_rate = run.summary.get('success_rate', None)
-                    total_scenarios = run.summary.get('total_scenarios', total_scenarios)
-                
-                runs_data.append(
-                    run.model_dump(exclude=["max_tokens"])
-                    #{
-                    #'ID': run.id,
-                    #'Model': run.model_name,
-                    #'Scenario Type': run.scenario_type,
-                    #'Created': format_datetime(run.created_at),
-                    #'Temperature': run.temperature,
-                    #'Top-p': run.top_p,
-                    #'Max Tokens': run.max_tokens,
-                    #'Scenarios': total_scenarios,
-                    #'Success Rate': f"{success_rate:.1%}" if success_rate is not None else "N/A",
-                    #}
-                )
-            
-            df = pd.DataFrame(runs_data)
+            st.write(f"Showing {len(df)} run(s)")
             
             # Display table
             st.dataframe(
@@ -269,22 +272,20 @@ def main():
                 hide_index=True,
             )
             
-            # Detailed view selector
-            st.subheader("View Run Details")
-            run_ids = [run.id for run in runs]
-            selected_run_id = st.selectbox(
-                "Select a run to view details",
-                options=run_ids,
-                format_func=lambda x: f"Run #{x}"
-            )
-            
-            if selected_run_id:
-                st.session_state['selected_run_id'] = selected_run_id
+            #st.subheader("View Run Details")
+            #run_ids = [run.id for run in runs]
+            #selected_run_id = st.selectbox(
+            #    "Select a run to view details",
+            #    options=run_ids,
+            #    format_func=lambda x: f"Run #{x}"
+            #)
+            #
+            #if selected_run_id:
+            #    st.session_state['selected_run_id'] = selected_run_id
     
     with tab3:
         st.header("Run Details")
         
-        # Get run ID from session state or input
         run_id_input = st.number_input(
             "Enter Run ID",
             min_value=1,
@@ -295,12 +296,11 @@ def main():
         if st.button("Load Run Details") or 'selected_run_id' in st.session_state:
             run_id = st.session_state.get('selected_run_id', run_id_input)
             
-            run = repo.get_eval_run(run_id)
+            run = get_cached_eval_run(db_path, run_id)
             
             if not run:
                 st.error(f"Run #{run_id} not found.")
             else:
-                # Run metadata
                 st.subheader("Run Information")
                 col1, col2, col3 = st.columns(3)
                 
@@ -321,7 +321,6 @@ def main():
                     #    st.write(f"**Max Tokens:** {run.max_tokens}")
                     st.write(f"**Total Scenarios:** {len(run.results)}")
                 
-                # Summary statistics
                 if run.summary:
                     st.subheader("Summary Statistics")
                     summary = run.summary
@@ -345,29 +344,23 @@ def main():
                         success_rate = BOOTSTRAPING_AGG_FUNC(success_rates)
                         st.metric("Success Rate", f"{success_rate:.1%}")
                 
-                # Results table
                 st.subheader("Results")
                 
                 if run.results:
-                    # Convert results to DataFrame
-                    results_df = pd.DataFrame(run.results)
-
-                    results_df['messages'] = results_df['messages'].apply(lambda msgs: [f"{m['role']}: {m['content']}" for m in msgs])
-                    results_df['tools'] = results_df['tools'].apply(lambda tools: [tool['function']['name'] for tool in tools])
+                    results_df = process_results_dataframe(db_path, run_id)
                     
-                    # Display with expandable rows for detailed view
-                    st.dataframe(
-                        results_df,
-                        use_container_width=True,
-                        hide_index=True,
-                    )
+                    if results_df is not None:
+                        st.dataframe(
+                            results_df,
+                            use_container_width=True,
+                            hide_index=True,
+                        )
                     
-                    # Show first few results in detail
-                    with st.expander("View Detailed Results (First 5)"):
-                        for i, result in enumerate(run.results[:5], 1):
-                            st.write(f"**Scenario {i}:**")
-                            st.json(result)
-                            st.divider()
+                    #with st.expander("View Detailed Results (First 5)"):
+                    #    for i, result in enumerate(run.results[:5], 1):
+                    #        st.write(f"**Scenario {i}:**")
+                    #        st.json(result)
+                    #        st.divider()
                 else:
                     st.info("No results available for this run.")
 
