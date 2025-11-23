@@ -202,6 +202,7 @@ def run_scenarios_with_vllm(
     top_p: float = 0.8,
     max_tokens: int = 512,
     extra_body: Optional[dict] = None,
+    n_runs: int = 1,
 ) -> List[Dict[str, Any]]:
     """
     Run scenarios through vLLM and collect responses.
@@ -209,146 +210,147 @@ def run_scenarios_with_vllm(
     Returns:
         List of results with scenario info and responses
     """
-    results = []
-    new_complete_conversation_column = []
-    
-    for i, scenario in enumerate(scenarios, 1):
-        scenario_id = scenario.get("scenario_id", f"scenario_{i}")
-        print(f"Processing scenario {i}/{len(scenarios)}: {scenario_id}")
-        
-        try:
-            # Prepare messages
-            messages = scenario.get("messages", [])
-            tools = scenario.get("tools", [])
-            
-            # Agent loop: continue until no tool calls or max steps reached
-            agent_steps = 5
-            all_tool_calls = []
-            final_response_text = ""
-            
-            for step in range(agent_steps):
-                # Clean tools to remove None values (required for Mistral parser)
-                cleaned_tools = clean_tools(tools) if tools else None
-                
-                # Make API call
-                response = client.chat.completions.create(
-                    model=model_name,
-                    messages=messages,
-                    tools=cleaned_tools,
-                    temperature=temperature,
-                    top_p=top_p,
-                    max_tokens=max_tokens,
-                    extra_body=extra_body,
-                )
-                
-                message = response.choices[0].message
-                response_text = message.content or ""
-                tool_calls = message.tool_calls if message.tool_calls else []
-                
-                # Create mapping of original IDs to normalized IDs for consistency
-                id_mapping = {}
-                if tool_calls:
-                    for tc in tool_calls:
-                        id_mapping[tc.id] = normalize_tool_call_id(tc.id)
-                
-                # Add assistant message to conversation
-                assistant_message = {
-                    "role": "assistant",
-                    "content": response_text,
+    for run in range(n_runs): 
+        results = []    
+        new_complete_conversation_column = []
+
+        for i, scenario in enumerate(scenarios, 1):
+            scenario_id = scenario.get("scenario_id", f"scenario_{i}")
+            print(f"Processing scenario {i}/{len(scenarios)}: {scenario_id}")
+
+            try:
+                # Prepare messages
+                messages = scenario.get("messages", [])
+                tools = scenario.get("tools", [])
+
+                # Agent loop: continue until no tool calls or max steps reached
+                agent_steps = 5
+                all_tool_calls = []
+                final_response_text = ""
+
+                for step in range(agent_steps):
+                    # Clean tools to remove None values (required for Mistral parser)
+                    cleaned_tools = clean_tools(tools) if tools else None
+
+                    # Make API call
+                    response = client.chat.completions.create(
+                        model=model_name,
+                        messages=messages,
+                        tools=cleaned_tools,
+                        temperature=temperature,
+                        top_p=top_p,
+                        max_tokens=max_tokens,
+                        extra_body=extra_body,
+                    )
+
+                    message = response.choices[0].message
+                    response_text = message.content or ""
+                    tool_calls = message.tool_calls if message.tool_calls else []
+
+                    # Create mapping of original IDs to normalized IDs for consistency
+                    id_mapping = {}
+                    if tool_calls:
+                        for tc in tool_calls:
+                            id_mapping[tc.id] = normalize_tool_call_id(tc.id)
+
+                    # Add assistant message to conversation
+                    assistant_message = {
+                        "role": "assistant",
+                        "content": response_text,
+                    }
+                    # Only include tool_calls if there are any
+                    if tool_calls:
+                        assistant_message["tool_calls"] = [
+                            {
+                                "id": id_mapping[tc.id],
+                                "type": tc.type,
+                                "function": {
+                                    "name": tc.function.name,
+                                    "arguments": tc.function.arguments,
+                                }
+                            }
+                            for tc in tool_calls
+                        ]
+                    messages.append(assistant_message)
+
+                    # Track all tool calls
+                    if tool_calls:
+                        all_tool_calls.extend(tool_calls)
+
+                    # If no tool calls, we're done
+                    if not tool_calls:
+                        final_response_text = response_text
+                        break
+
+                    # Execute tool calls and add results to messages
+                    for tool_call in tool_calls:
+                        tool_result = execute_tool_call(tool_call, scenario_id)
+
+                        # Use the same normalized ID from the mapping
+                        normalized_id = id_mapping[tool_call.id]
+
+                        # Add tool result to messages
+                        messages.append({
+                            "role": "tool",
+                            "content": tool_result,
+                            "tool_call_id": normalized_id,
+                        })
+
+                        print(f"    ✓ Executed tool: {tool_call.function.name} (ID: {normalized_id})")
+
+                # Use final response text and all collected tool calls
+                # If we exhausted steps, use the last response
+                if not final_response_text:
+                    final_response_text = response_text
+                response_text = final_response_text
+                tool_calls = all_tool_calls
+
+                # Store response text and tool calls info
+                scenario['messages'] = messages
+                result = {
+                    "scenario_id": scenario_id,
+                    "response_text": response_text,
+                    "tool_calls": [tc.model_dump() for tc in tool_calls],
+                    "tool_calls_count": len(tool_calls),
+                    "has_tool_calls": len(tool_calls) > 0,
                 }
-                # Only include tool_calls if there are any
-                if tool_calls:
-                    assistant_message["tool_calls"] = [
+
+                new_complete_conversation_column.append(messages)
+
+                # Store full response for evaluation (as dict for easier handling)
+                result["response_dict"] = {
+                    "content": response_text,
+                    "tool_calls": [
                         {
-                            "id": id_mapping[tc.id],
+                            "id": tc.id,
                             "type": tc.type,
                             "function": {
                                 "name": tc.function.name,
                                 "arguments": tc.function.arguments,
                             }
-                        }
+                        } if hasattr(tc, "function") else tc
                         for tc in tool_calls
-                    ]
-                messages.append(assistant_message)
+                    ] if tool_calls else [],
+                }
 
-                # Track all tool calls
-                if tool_calls:
-                    all_tool_calls.extend(tool_calls)
-                
-                # If no tool calls, we're done
-                if not tool_calls:
-                    final_response_text = response_text
-                    break
-                
-                # Execute tool calls and add results to messages
-                for tool_call in tool_calls:
-                    tool_result = execute_tool_call(tool_call, scenario_id)
-                    
-                    # Use the same normalized ID from the mapping
-                    normalized_id = id_mapping[tool_call.id]
-                    
-                    # Add tool result to messages
-                    messages.append({
-                        "role": "tool",
-                        "content": tool_result,
-                        "tool_call_id": normalized_id,
-                    })
-                    
-                    print(f"    ✓ Executed tool: {tool_call.function.name} (ID: {normalized_id})")
-                
-            # Use final response text and all collected tool calls
-            # If we exhausted steps, use the last response
-            if not final_response_text:
-                final_response_text = response_text
-            response_text = final_response_text
-            tool_calls = all_tool_calls
-            
-            # Store response text and tool calls info
-            scenario['messages'] = messages
-            result = {
-                "scenario_id": scenario_id,
-                "response_text": response_text,
-                "tool_calls": [tc.model_dump() for tc in tool_calls],
-                "tool_calls_count": len(tool_calls),
-                "has_tool_calls": len(tool_calls) > 0,
-            }
+                results.append(result)
+                print(f"  ✓ Completed - Tool calls: {len(tool_calls)}")
 
-            new_complete_conversation_column.append(messages)
-            
-            # Store full response for evaluation (as dict for easier handling)
-            result["response_dict"] = {
-                "content": response_text,
-                "tool_calls": [
-                    {
-                        "id": tc.id,
-                        "type": tc.type,
-                        "function": {
-                            "name": tc.function.name,
-                            "arguments": tc.function.arguments,
-                        }
-                    } if hasattr(tc, "function") else tc
-                    for tc in tool_calls
-                ] if tool_calls else [],
-            }
-            
-            results.append(result)
-            print(f"  ✓ Completed - Tool calls: {len(tool_calls)}")
-            
-        except Exception as e:
-            print(f"  ✗ Error: {str(e)}")
-            results.append({
-                "scenario_id": scenario_id,
-                "error": str(e),
-                "response_text": "",
-                "tool_calls": [],
-                "tool_calls_count": 0,
-                "has_tool_calls": False,
-                "response_dict": {"content": "", "tool_calls": []},
-            })
+            except Exception as e:
+                print(f"  ✗ Error: {str(e)}")
+                results.append({
+                    "scenario_id": scenario_id,
+                    "error": str(e),
+                    "response_text": "",
+                    "tool_calls": [],
+                    "tool_calls_count": 0,
+                    "has_tool_calls": False,
+                    "response_dict": {"content": "", "tool_calls": []},
+                })
 
-    scenarios = scenarios.remove_columns("messages")
-    scenarios = scenarios.add_column("messages", new_complete_conversation_column)
-    scenarios = scenarios.add_column(f"output_{run_id}", [r['response_dict'] for r in results])
+        scenarios = scenarios.remove_columns("messages")
+        scenarios = scenarios.add_column("messages", new_complete_conversation_column)
+        scenarios = scenarios.add_column(f"output_{run_id}", [r['response_dict'] for r in results])
 
     return scenarios#results
 

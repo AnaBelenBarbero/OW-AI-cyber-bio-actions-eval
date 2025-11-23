@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "src"
 version = "0.1.0"
-description = "Open Weights AI Actions Evaluation in the Cyber and Bio domains."
+description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = []

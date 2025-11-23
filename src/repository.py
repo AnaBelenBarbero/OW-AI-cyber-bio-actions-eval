@@ -5,6 +5,7 @@ import json
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 from datasets import Dataset
+import pandas as pd
 from pydantic import BaseModel
 
 from src.database import Database
@@ -93,6 +94,30 @@ class EvalRunRepository:
         conn.commit()
         
         return run_id
+
+    def get_all_run_ids(self) -> List[int]:
+        """
+        Retrieve all run IDs from the database.
+        """
+        conn = self.db.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM eval_runs")
+        return [row["id"] for row in cursor.fetchall()]
+    
+    def get_all_runs(self) -> List[dict]:
+        """
+        Retrieve all runs as a dataset.
+        """
+        conn = self.db.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT  * FROM eval_runs")
+        return [dict(row) for row in cursor.fetchall()]
+
+    def get_all_runs_as_pandas_df(self) -> pd.DataFrame:
+        """
+        Retrieve all runs as a pandas DataFrame.
+        """
+        return pd.DataFrame(self.get_all_runs())
     
     def get_eval_run(self, run_id: int) -> EvalRun | None:
         """
@@ -215,7 +240,7 @@ class EvalRunRepository:
             return None
         
         # Convert results list back to Dataset
-        return Dataset.from_list(eval_run["results"])
+        return Dataset.from_list(eval_run.results)
     
     def get_summary_stats(self) -> Dict[str, Any]:
         """

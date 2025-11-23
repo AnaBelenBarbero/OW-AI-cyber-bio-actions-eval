@@ -6,6 +6,13 @@ PROJECT_ROOT="$( cd "$SCRIPT_DIR/.." && pwd )"
 cd "$PROJECT_ROOT" || exit 1
 
 # Configuration
+if [ "$ENFORCE_EAGER" = "true" ]; then
+    echo "Enforcing eager mode"
+    ENFORCE_EAGER_FLAG="--enforce-eager"
+else
+    ENFORCE_EAGER_FLAG=""
+fi
+
 if [ "$ENABLE_AUTO_TOOL_CHOICE" = "true" ]; then
     echo "Enabling auto tool choice"
     ENABLE_AUTO_TOOL_CHOICE_FLAG="--enable-auto-tool-choice"
@@ -61,6 +68,7 @@ VLLM_CMD="vllm serve \"$MODEL_NAME\" \
     --max-num-seqs \"$MAX_NUM_SEQS\" \
     --host \"$HOST\" \
     --port \"$PORT\" \
+    $ENFORCE_EAGER_FLAG \
     $ENABLE_AUTO_TOOL_CHOICE_FLAG \
     --tool-call-parser \"$TOOL_CALL_PARSER\" \
     $TOKENIZER_MODE_FLAG \
