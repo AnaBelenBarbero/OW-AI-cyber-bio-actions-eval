@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.repository import EvalRun, EvalRunRepository
 
 BOOTSTRAPING_AGG_FUNC = np.mean
+DB_PATH = "eval_runs.db"
 
 st.set_page_config(
     page_title="AI Actions Evaluation Dashboard",
@@ -48,20 +49,20 @@ st.markdown("""
 
 
 @st.cache_resource
-def get_repository(db_path: str = "eval_runs.db"):
+def get_repository(db_path: str = DB_PATH):
     """Get repository instance (cached)."""
     return EvalRunRepository(db_path)
 
 
 @st.cache_data
-def get_cached_summary_stats(db_path: str):
+def get_cached_summary_stats(db_path: str = DB_PATH):
     """Get summary stats (cached)."""
     repo = get_repository(db_path)
     return repo.get_summary_stats()
 
 
 @st.cache_data
-def get_cached_all_runs(db_path: str, limit: int = 1000):
+def get_cached_all_runs(db_path: str = DB_PATH, limit: int = 1000):
     """Get all runs for filters (cached)."""
     repo = get_repository(db_path)
     return repo.get_eval_runs(limit=limit)
@@ -96,28 +97,35 @@ def process_models_summary_data(db_path: str, limit: int = 1000):
         return []
     
     model_data = {}
-    for run in all_runs:
-        if run.model_name not in model_data:
-            model_data[run.model_name] = {
-                'model_parent': run.model_parent,
+    for r in all_runs:
+        if r.model_name not in model_data:
+            model_data[r.model_name] = {
+                'model_parent': r.model_parent,
                 'success_rates': []
             }
         
-        if run.summary:
-            success_rate = run.summary.get('success_rate', None)
+        if r.summary:
+            # Get all keys in r.summary that start with 'eval_'
+            eval_keys = [k for k in r.summary.keys() if k.startswith('eval_')]
+            eval_success_rates = []
+            for k in eval_keys:
+                eval_summary = r.summary.get(k, {})
+                if isinstance(eval_summary, dict) and 'success_rate' in eval_summary:
+                    eval_success_rates.append(eval_summary['success_rate'])
+            # If there are any success rates under eval_*, aggregate them
+            success_rate = BOOTSTRAPING_AGG_FUNC(eval_success_rates) if eval_success_rates else None
             if success_rate is not None:
-                model_data[run.model_name]['success_rates'].append(success_rate)
+                model_data[r.model_name]['success_rates'].append(success_rate)
     
     models_summary_data = []
     for model_name, data in model_data.items():
         aggregated_success_rate = None
         if data['success_rates']:
             aggregated_success_rate = BOOTSTRAPING_AGG_FUNC(data['success_rates'])
-        
         models_summary_data.append({
             'Model Name': model_name,
             'Parent Name': data['model_parent'] if data['model_parent'] else 'N/A',
-            'Success Rate': f"{aggregated_success_rate:.1%}" if aggregated_success_rate is not None else "N/A"
+            'Security Rate (1 - Success Rate)': 1 - aggregated_success_rate if aggregated_success_rate is not None else "N/A"
         })
     
     return models_summary_data
@@ -162,18 +170,16 @@ def format_datetime(dt_str: str) -> str:
 
 def main():
     st.markdown('<h1 class="main-header">📊 Evaluation Runs Dashboard</h1>', unsafe_allow_html=True)
-    
-    db_path = st.sidebar.text_input("Database Path", value="eval_runs.db")
-    
+        
     try:
-        stats = get_cached_summary_stats(db_path)
+        stats = get_cached_summary_stats(DB_PATH)
     except Exception as e:
         st.error(f"Error loading database: {e}")
         st.stop()
     
     st.sidebar.header("🔍 Filters Run List")
     
-    all_runs: list[EvalRun] | None = get_cached_all_runs(db_path, limit=1000)
+    all_runs: list[EvalRun] | None = get_cached_all_runs(DB_PATH, limit=1000)
     unique_models = sorted(set(run.model_name for run in all_runs)) if all_runs else []
     unique_scenarios = sorted(set(run.scenario_type for run in all_runs)) if all_runs else []
     unique_model_parents = sorted(set(run.model_parent for run in all_runs)) if all_runs else []
@@ -196,7 +202,7 @@ def main():
         format_func=lambda x: "All Scenarios" if x is None else x
     )
     
-    limit = st.sidebar.number_input("Max Results", min_value=1, max_value=1000, value=1)
+    limit = st.sidebar.number_input("Max Results", min_value=1, max_value=1000, value=50)
     
     tab1, tab2, tab3 = st.tabs(["📈 Overview", "📋 Runs List", "🔍 Run Details"])
     
@@ -224,10 +230,14 @@ def main():
                 st.metric("Latest Run", "N/A")
         
         st.subheader("Models Summary")
-        models_summary_data = process_models_summary_data(db_path, limit=1000)
+        models_summary_data = process_models_summary_data(DB_PATH, limit=1000)
         
         if models_summary_data:
-            models_summary_df = pd.DataFrame(models_summary_data)
+            models_summary_df = pd.DataFrame(models_summary_data).sort_values(
+                by='Security Rate (1 - Success Rate)', 
+                ascending=False
+            )
+            models_summary_df["Security Rate (1 - Success Rate)"] = models_summary_df["Security Rate (1 - Success Rate)"].map(lambda x: f"{x:.1%}")
             st.dataframe(
                 models_summary_df,
                 use_container_width=True,
@@ -251,7 +261,7 @@ def main():
         st.header("Evaluation Runs")
         
         df = process_runs_dataframe(
-            db_path,
+            DB_PATH,
             selected_model_parent,
             selected_model,
             selected_scenario,
@@ -296,7 +306,7 @@ def main():
         if st.button("Load Run Details") or 'selected_run_id' in st.session_state:
             run_id = st.session_state.get('selected_run_id', run_id_input)
             
-            run = get_cached_eval_run(db_path, run_id)
+            run = get_cached_eval_run(DB_PATH, run_id)
             
             if not run:
                 st.error(f"Run #{run_id} not found.")
@@ -347,7 +357,7 @@ def main():
                 st.subheader("Results")
                 
                 if run.results:
-                    results_df = process_results_dataframe(db_path, run_id)
+                    results_df = process_results_dataframe(DB_PATH, run_id)
                     
                     if results_df is not None:
                         st.dataframe(
