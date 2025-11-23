@@ -91,14 +91,15 @@ run-decision-making:
 run-cyber:
 	$(MAKE) run-eval SCENARIOS=cyber
 
-# Clean up generated files
 clean:
 	rm -f vllm_server.log output_eval.json
 
 run-all:
-	make setup-with-deps
 	make run-eval SCENARIOS=decision-making,cyber,bio MODEL_NAME="Qwen/Qwen3-8B" MODEL_PARENT="Qwen3-8B" MAX_MODEL_LEN=17000 TENSOR_PARALLEL_SIZE=2
-	make run-eval SCENARIOS=decision-making,cyber,bio MODEL_NAME="Goekdeniz-Guelmez/Josiefied-Qwen3-8B-abliterated-v1" MODEL_PARENT="Qwen3-8B" MAX_MODEL_LEN=20000 TENSOR_PARALLEL_SIZE=2
-	make run-eval SCENARIOS=decision-making,cyber,bio MODEL_NAME="mistralai/Ministral-8B-Instruct-2410" MODEL_PARENT="Mistral-8B" TOOL_CALL_PARSER="mistral" LOAD_FORMAT="mistral" CONFIG_FORMAT="mistral" TOKENIZER_MODE="mistral" EXTRA_BODY='{}' TENSOR_PARALLEL_SIZE=2
-	make run-eval SCENARIOS=decision-making,cyber,bio MODEL_NAME="openai/gpt-oss-120b" MODEL_PARENT="gptoss-120B" TOOL_CALL_PARSER="openai" EXTRA_BODY='{}' TENSOR_PARALLEL_SIZE=2
-	make run-eval SCENARIOS=decision-making,cyber,bio MODEL_NAME="kldzj/gpt-oss-120b-heretic" MODEL_PARENT="gptoss-120B" TOOL_CALL_PARSER="openai" EXTRA_BODY='{}' TENSOR_PARALLEL_SIZE=2
+	make run-eval SCENARIOS=decision-making,cyber,bio MODEL_NAME="Goekdeniz-Guelmez/Josiefied-Qwen3-8B-abliterated-v1" MODEL_PARENT="Qwen3-8B" MAX_MODEL_LEN=20000 TENSOR_PARALLEL_SIZE=$(TENSOR_PARALLEL_SIZE)
+	make run-eval SCENARIOS=decision-making,cyber,bio MODEL_NAME="mistralai/Ministral-8B-Instruct-2410" MODEL_PARENT="Mistral-8B" TOOL_CALL_PARSER="mistral" LOAD_FORMAT="mistral" CONFIG_FORMAT="mistral" TOKENIZER_MODE="mistral" EXTRA_BODY='{}' TENSOR_PARALLEL_SIZE=$(TENSOR_PARALLEL_SIZE)
+	make run-eval SCENARIOS=decision-making,cyber,bio MODEL_NAME="openai/gpt-oss-120b" MODEL_PARENT="gptoss-120B" TOOL_CALL_PARSER="openai" EXTRA_BODY='{}' TENSOR_PARALLEL_SIZE=$(TENSOR_PARALLEL_SIZE)
+	make run-eval SCENARIOS=decision-making,cyber,bio MODEL_NAME="kldzj/gpt-oss-120b-heretic" MODEL_PARENT="gptoss-120B" TOOL_CALL_PARSER="openai" EXTRA_BODY='{}' TENSOR_PARALLEL_SIZE=$(TENSOR_PARALLEL_SIZE)
+
+run-app:
+	uv run streamlit run app/app.py
