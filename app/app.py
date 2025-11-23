@@ -4,6 +4,8 @@ from datetime import datetime
 import sys
 from pathlib import Path
 import numpy as np
+import plotly.express as px
+import plotly.graph_objects as go
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -159,6 +161,40 @@ def process_results_dataframe(db_path: str, run_id: int):
     return results_df
 
 
+@st.cache_data
+def process_chart_data(db_path: str, limit: int = 1000):
+    """Process data for scenario type charts (cached)."""
+    all_runs = get_cached_all_runs(db_path, limit)
+    if not all_runs:
+        return []
+    
+    chart_data = []
+    for run in all_runs:
+        if not run.summary:
+            continue
+        
+        # Extract success rate from summary (similar to notebook logic)
+        # Get all keys in r.summary that start with 'eval_'
+        eval_keys = [k for k in run.summary.keys() if k.startswith('eval_')]
+        eval_success_rates = []
+        for k in eval_keys:
+            eval_summary = run.summary.get(k, {})
+            if isinstance(eval_summary, dict) and 'success_rate' in eval_summary:
+                eval_success_rates.append(eval_summary['success_rate'])
+        
+        # Aggregate success rates if available
+        if eval_success_rates:
+            success_rate = BOOTSTRAPING_AGG_FUNC(eval_success_rates)
+            chart_data.append({
+                'scenario_type': run.scenario_type,
+                'model_parent': run.model_parent if run.model_parent else 'N/A',
+                'model_name': run.model_name,
+                'success_rate': success_rate
+            })
+    
+    return chart_data
+
+
 def format_datetime(dt_str: str) -> str:
     """Format datetime string for display."""
     try:
@@ -246,16 +282,82 @@ def main():
         else:
             st.info("No model data available for summary table.")
         
-        if stats['latest_run']:
-            st.subheader("Latest Run")
-            latest = stats['latest_run']
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.write(f"**ID:** {latest['id']}")
-            with col2:
-                st.write(f"**Model:** {latest['model_name']}")
-            with col3:
-                st.write(f"**Scenario:** {latest['scenario_type']}")
+        #if stats['latest_run']:
+        #    st.subheader("Latest Run")
+        #    latest = stats['latest_run']
+        #    col1, col2, col3 = st.columns(3)
+        #    with col1:
+        #        st.write(f"**ID:** {latest['id']}")
+        #    with col2:
+        #        st.write(f"**Model:** {latest['model_name']}")
+        #    with col3:
+        #        st.write(f"**Scenario:** {latest['scenario_type']}")
+        
+        # Add charts for success rate by scenario type
+        st.subheader("Success Rate by Scenario Type")
+        chart_data = process_chart_data(DB_PATH, limit=1000)
+        
+        if chart_data:
+            chart_df = pd.DataFrame(chart_data)
+            scenario_types = sorted(chart_df['scenario_type'].unique())
+            
+            for scenario_type in scenario_types:
+                df_subset = chart_df[chart_df['scenario_type'] == scenario_type]
+                
+                # Group by model_parent and model_name, calculate mean success rate
+                grouped = df_subset.groupby(['model_parent', 'model_name'])['success_rate'].mean().reset_index()
+                
+                # Sort by model_parent first, then model_name to group models by parent
+                grouped = grouped.sort_values(['model_parent', 'model_name'])
+                
+                # Create bar chart with model_name on x-axis, colored by model_parent
+                fig = px.bar(
+                    grouped,
+                    x='model_name',
+                    y='success_rate',
+                    color='model_parent',
+                    text='success_rate',
+                    title=f'Success Rate by Model Name for: {scenario_type.capitalize()}',
+                    labels={
+                        'model_name': 'Model Name',
+                        'success_rate': 'Success Rate',
+                        'model_parent': 'Model Parent'
+                    }
+                )
+                
+                # Format text labels as percentages and make bars thinner
+                fig.update_traces(
+                    texttemplate='%{text:.1%}',
+                    textposition='auto',
+                    width=0.3
+                )
+                
+                # Update layout
+                fig.update_layout(
+                    height=800,
+                    xaxis=dict(
+                        title='Model Name',
+                        tickangle=-30 if len(grouped) > 5 else 0
+                    ),
+                    yaxis=dict(
+                        title='Success Rate',
+                        tickformat='.0%'
+                    ),
+                    legend=dict(
+                        title='Model Parent',
+                        font=dict(size=10),
+                        orientation="v",
+                        yanchor="top",
+                        y=1,
+                        xanchor="left",
+                        x=1.01
+                    ),
+                    showlegend=True
+                )
+                
+                st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("No data available for charts.")
     
     with tab2:
         st.header("Evaluation Runs")
