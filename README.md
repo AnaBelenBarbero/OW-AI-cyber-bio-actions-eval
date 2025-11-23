@@ -82,7 +82,7 @@ make run-eval SCENARIOS=decision-making,cyber MODEL_NAME="realoperator42/ministr
 ```
 make run-eval SCENARIOS=decision_making,cyber,bio MODEL_NAME="Qwen/Qwen3-32B" MODEL_PARENT="Qwen3-32B" MAX_MODEL_LEN=17000 TENSOR_PARALLEL_SIZE=2
 ```
-Abliterated
+Abliterated, (need request access and HF token! `hf auth login`)
 ```
 make run-eval SCENARIOS=decision_making,cyber,bio MODEL_NAME="huihui-ai/Qwen3-32B-abliterated" MODEL_PARENT="Qwen3-32B" MAX_MODEL_LEN=17000 TENSOR_PARALLEL_SIZE=2
 ```
